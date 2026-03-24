@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local AI Chat (Ollama)</title>
+    <!-- 引入 Tailwind CSS 进行快速美化 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Marked.js 用于解析 Markdown -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        /* 自定义滚动条 */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #c1c1c1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8; 
+        }
+
+        /* 消息气泡样式 */
+        .message-user {
+            background-color: #eff6ff; /* blue-50 */
+            border-radius: 1rem 1rem 0 1rem;
+            align-self: flex-end;
+            max-width: 85%;
+            margin-left: auto;
+        }
+
+        .message-ai {
+            background-color: #ffffff;
+            border-radius: 1rem 1rem 1rem 0;
+            align-self: flex-start;
+            max-width: 85%;
+            border: 1px solid #e5e7eb;
+        }
+
+        /* Markdown 内容样式微调 */
+        .prose p { margin-bottom: 0.5em; }
+        .prose pre { background: #f3f4f6; padding: 10px; border-radius: 6px; overflow-x: auto; }
+        .prose code { font-family: monospace; background: #f3f4f6; padding: 2px 4px; border-radius: 4px; color: #d946ef; }
+        .prose pre code { background: transparent; color: inherit; padding: 0; }
+        
+        /* 加载动画 */
+        .typing-dot {
+            animation: typing 1.4s infinite ease-in-out both;
+            fill: #6b7280;
+        }
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+        
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen flex flex-col font-sans text-gray-800">
+
+    <!-- 顶部导航栏 -->
+    <header class="bg-white shadow-sm z-10 px-4 py-3 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+            <div class="w-8 h-8 bg-green-600 rounded-lg flex items-center justify-center text-white font-bold">O</div>
+            <h1 class="text-lg font-semibold text-gray-700">Ollama Chat</h1>
+        </div>
+        <div class="flex items-center gap-2">
+            <label class="text-sm text-gray-500">模型:</label>
+            <input type="text" id="model-name" value="mistral:7b-instruct-q4_0" 
+                   class="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 w-48 sm:w-64">
+        </div>
+    </header>
+
+    <!-- 聊天区域 -->
+    <main id="chat-container" class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 scroll-smooth">
+        <!-- 欢迎消息 -->
+        <div class="message-ai p-4 shadow-sm">
+            <div class="prose text-sm sm:text-base">
+                <p>你好！我是运行在你本地的 AI 助手。我已经连接到 <code>localhost:11434</code>。</p>
+                <p>请在下方输入问题开始对话。</p>
+            </div>
+        </div>
+    </main>
+
+    <!-- 底部输入框 -->
+    <footer class="bg-white p-4 border-t border-gray-200">
+        <div class="max-w-4xl mx-auto relative flex items-end gap-2">
+            <textarea id="user-input" rows="1" 
+                class="w-full bg-gray-50 border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-green-500 focus:bg-white resize-none max-h-48 overflow-y-auto"
+                placeholder="发送消息给 AI... (Shift+Enter 换行)"></textarea>
+            
+            <button id="send-btn" onclick="sendMessage()" 
+                class="mb-1 bg-green-600 hover:bg-green-700 text-white rounded-full p-3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5">
+                    <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" />
+                </svg>
+            </button>
+        </div>
+        <div class="text-center mt-2">
+            <p class="text-xs text-gray-400">Powered by Ollama &bull; Running Locally</p>
+        </div>
+    </footer>
+
+    <script>
+        const chatContainer = document.getElementById('chat-container');
+        const userInput = document.getElementById('user-input');
+        const modelInput = document.getElementById('model-name');
+        const sendBtn = document.getElementById('send-btn');
+
+        // 自动调整 textarea 高度
+        userInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = (this.scrollHeight) + 'px';
+            if(this.value === '') this.style.height = 'auto';
+        });
+
+        // 监听回车发送
+        userInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        function appendMessage(role, text, isHtml = false) {
+            const div = document.createElement('div');
+            div.className = role === 'user' ? 'message-user p-4 shadow-sm' : 'message-ai p-4 shadow-sm';
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'prose text-sm sm:text-base break-words';
+            
+            if (isHtml) {
+                contentDiv.innerHTML = text;
+            } else {
+                // 简单转义，防止 XSS，实际生产环境建议用 DOMPurify
+                contentDiv.textContent = text;
+            }
+
+            div.appendChild(contentDiv);
+            chatContainer.appendChild(div);
+            scrollToBottom();
+            return contentDiv; // 返回内容 div 以便后续更新
+        }
+
+        function appendLoading() {
+            const div = document.createElement('div');
+            div.className = 'message-ai p-4 shadow-sm flex items-center gap-1';
+            div.id = 'loading-indicator';
+            div.innerHTML = `
+                <svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <circle class="typing-dot" cx="4" cy="12" r="3"/>
+                    <circle class="typing-dot" cx="12" cy="12" r="3"/>
+                    <circle class="typing-dot" cx="20" cy="12" r="3"/>
+                </svg>
+            `;
+            chatContainer.appendChild(div);
+            scrollToBottom();
+            return div;
+        }
+
+        function removeLoading() {
+            const loading = document.getElementById('loading-indicator');
+            if (loading) loading.remove();
+        }
+
+        function scrollToBottom() {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const text = userInput.value.trim();
+            const model = modelInput.value.trim();
+            
+            if (!text) return;
+
+            // 1. 显示用户消息
+            appendMessage('user', text);
+            userInput.value = '';
+            userInput.style.height = 'auto';
+            sendBtn.disabled = true;
+
+            // 2. 显示加载中
+            appendLoading();
+
+            let aiContentDiv = null;
+            let fullResponse = "";
+
+            try {
+                const response = await fetch('http://localhost:11434/api/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        prompt: text,
+                        stream: true // 开启流式传输
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                removeLoading();
+                // 创建 AI 消息容器
+                aiContentDiv = appendMessage('ai', '', false); 
+                aiContentDiv.innerHTML = '<span class="animate-pulse">▋</span>'; // 初始光标
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    // Ollama 返回的是多行 JSON，需要按行分割处理
+                    const lines = chunk.split('\n').filter(line => line.trim() !== '');
+
+                    for (const line of lines) {
+                        try {
+                            const json = JSON.parse(line);
+                            if (json.response) {
+                                fullResponse += json.response;
+                                // 实时渲染 Markdown
+                                aiContentDiv.innerHTML = marked.parse(fullResponse);
+                                scrollToBottom();
+                            }
+                            if (json.done) {
+                                // 生成结束
+                                break;
+                            }
+                        } catch (e) {
+                            console.error("Error parsing JSON line", e);
+                        }
+                    }
+                }
+
+            } catch (error) {
+                removeLoading();
+                let errorMsg = "连接失败。请确保：<br>1. Ollama 正在运行 (<code>ollama serve</code>)<br>2. 浏览器允许访问本地接口 (可能需要配置 CORS 或使用 HTTPS 代理)<br>错误信息: " + error.message;
+                
+                if (!aiContentDiv) {
+                    aiContentDiv = appendMessage('ai', '', false);
+                }
+                aiContentDiv.innerHTML = `<span class="text-red-500">${errorMsg}</span>`;
+            } finally {
+                sendBtn.disabled = false;
+                userInput.focus();
+            }
+        }
+    </script>
+</body>
+</html>
